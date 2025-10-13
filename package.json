@@ -6,7 +6,11 @@
     "dev": "tsx --watch src/server.ts",
     "dev:oauth": "tsx --watch src/oauth.ts",
     "start": "tsx src/server.ts",
-    "start:oauth": "tsx src/oauth.ts"
+    "start:oauth": "tsx src/oauth.ts",
+    "docker:build": "docker build -t mcp-pluggdax-bare:dev .",
+    "docker:run": "docker run --rm -p 3000:3000 --name mcp-pluggdax mcp-pluggdax-bare:dev",
+    "docker:stop": "docker rm -f mcp-pluggdax || true",
+    "docker:logs": "docker logs -f mcp-pluggdax"
   },
   "keywords": [],
   "author": "",

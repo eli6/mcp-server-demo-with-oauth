@@ -2,7 +2,9 @@
 
 This guide shows a minimal, copy‑ready flow to run:
 - A Streamable HTTP MCP server (with SSE) on port 3000
-- A separate OAuth Authorization Server (demo) on port 3001 that you can later swap for a managed IdP
+- A separate OAuth Authorization Server (demo) on port 3001 that you can later swap for a managed IdP. 
+
+⚠️ Do not use this OAuth service in production, it is just for demonstration purposes.
 
 **Architecture**: Two separate servers for realistic production setup. The MCP server focuses purely on MCP functionality while the OAuth server handles all authentication flows.
 

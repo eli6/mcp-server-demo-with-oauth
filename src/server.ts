@@ -10,8 +10,9 @@ import { isInitializeRequest, CallToolResult } from "@modelcontextprotocol/sdk/t
 // Config
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const OAUTH_SERVER_URL = process.env.OAUTH_SERVER_URL || "http://localhost:3001";
+const DISABLE_AUTH = String(process.env.DISABLE_AUTH || "").toLowerCase() === "true" || process.env.DISABLE_AUTH === "1";
 const OAUTH_INTROSPECT_URL = process.env.OAUTH_INTROSPECT_URL || `${OAUTH_SERVER_URL}/introspect`;
-const REQUIRE_AUTH = !!OAUTH_INTROSPECT_URL;
+const REQUIRE_AUTH = !DISABLE_AUTH;
 const SCOPES_SUPPORTED = ["mcp:tools", "openid", "profile", "email"];
 
 // Simple Bearer auth using introspection (opaque tokens)
