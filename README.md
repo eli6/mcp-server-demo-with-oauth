@@ -1,8 +1,10 @@
 # Minimal MCP Server + OAuth Demo (Bare Setup Guide)
 
 This guide shows a minimal, copy‑ready flow to run:
-- A Streamable HTTP MCP server (with SSE)
-- A simple OAuth Authorization Server (demo) you can later swap for a managed IdP
+- A Streamable HTTP MCP server (with SSE) on port 3000
+- A separate OAuth Authorization Server (demo) on port 3001 that you can later swap for a managed IdP
+
+**Architecture**: Two separate servers for realistic production setup. The MCP server focuses purely on MCP functionality while the OAuth server handles all authentication flows.
 
 Use this as the README for a bare server repo.
 
@@ -25,6 +27,8 @@ Start the MCP server (port 3000) with token validation via introspection:
 ```bash
 OAUTH_INTROSPECT_URL=http://localhost:3001/introspect npm run dev
 ```
+
+**Note**: The MCP server automatically points to the OAuth server at `http://localhost:3001` for all OAuth metadata and token validation.
 
 Tip: If you want to run MCP without auth locally, omit the env var:
 
@@ -153,7 +157,7 @@ curl -i -X POST http://localhost:3000/mcp \
   -H "Accept: application/json, text/event-stream" \
   -H "Authorization: Bearer ACCESS_TOKEN" \
   -H "Mcp-Session-Id: SESSION_ID" \
-  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"count","arguments":{"number":"5"}}}'
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"count","arguments":{"number":5}}}'
 ```
 
 
@@ -176,6 +180,24 @@ curl -sS -X POST http://localhost:3001/introspect \
 
 ## Swapping to a managed IdP later
 
-- Replace the demo OAuth with a real provider (Auth0/Okta/Keycloak/ORY/Azure/Cognito).
-- Validate tokens in MCP via JWT (JWKS) or introspection, and keep the `/mcp` contract the same.
-- If your IdP supports Dynamic Client Registration, expose `/register`; otherwise, create clients via the IdP’s admin API/UI.
+**Easy Migration**: Since the servers are separated, you can easily swap the OAuth server for a managed provider:
+
+1. **Replace the demo OAuth server** with a real provider (Auth0/Okta/Keycloak/ORY/Azure/Cognito)
+2. **Update the MCP server configuration** - just change the `OAUTH_SERVER_URL` environment variable:
+   ```bash
+   OAUTH_SERVER_URL=https://yourcompany.okta.com npm run dev
+   ```
+3. **Keep the MCP contract the same** - validate tokens via JWT (JWKS) or introspection
+4. **Client registration**: If your IdP supports Dynamic Client Registration, expose `/register`; otherwise, create clients via the IdP's admin API/UI
+
+**Production Architecture**:
+```
+┌─────────────────┐    ┌─────────────────┐
+│   MCP Server    │    │  Managed IdP    │
+│   Your Domain   │◄──►│  (Okta/etc.)    │
+│                 │    │                 │
+│ • MCP endpoints │    │ • OAuth flows   │
+│ • OAuth metadata│    │ • Token mgmt    │
+│ • Bearer auth   │    │ • User mgmt     │
+└─────────────────┘    └─────────────────┘
+```

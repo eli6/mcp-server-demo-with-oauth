@@ -9,13 +9,17 @@ import { isInitializeRequest, CallToolResult } from "@modelcontextprotocol/sdk/t
 
 // Config
 const PORT = parseInt(process.env.PORT || "3000", 10);
-const OAUTH_INTROSPECT_URL = process.env.OAUTH_INTROSPECT_URL; // e.g. https://auth.example.com/introspect
+const OAUTH_SERVER_URL = process.env.OAUTH_SERVER_URL || "http://localhost:3001";
+const OAUTH_INTROSPECT_URL = process.env.OAUTH_INTROSPECT_URL || `${OAUTH_SERVER_URL}/introspect`;
 const REQUIRE_AUTH = !!OAUTH_INTROSPECT_URL;
+const SCOPES_SUPPORTED = ["mcp:tools", "openid", "profile", "email"];
 
 // Simple Bearer auth using introspection (opaque tokens)
-async function verifyAccessToken(token: string) {
+async function verifyAccessToken(token: string, expectedResource?: string) {
   if (!REQUIRE_AUTH) return { clientId: "dev", scopes: [], expiresAt: Math.floor(Date.now() / 1000) + 3600 };
-  const res = await fetch(OAUTH_INTROSPECT_URL!, {
+  
+  // Use external introspection (OAuth server)
+  const res = await fetch(OAUTH_INTROSPECT_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ token }).toString()
@@ -23,6 +27,12 @@ async function verifyAccessToken(token: string) {
   if (!res.ok) throw new Error(`Introspection failed: ${res.status}`);
   const data = await res.json();
   if (!data.active) throw new Error("Token inactive");
+  
+  // Validate audience/resource for external tokens
+  if (expectedResource && data.aud && data.aud !== expectedResource) {
+    throw new Error("Token not intended for this resource");
+  }
+  
   return {
     clientId: data.client_id ?? "unknown",
     scopes: (data.scope ? String(data.scope).split(" ") : []) as string[],
@@ -34,19 +44,63 @@ const app = express();
 app.use(express.json());
 app.use(cors({ origin: "*", exposedHeaders: ["Mcp-Session-Id"] }));
 
-// Optional Bearer auth middleware
+// OAuth metadata endpoints (MUST be public - no auth required)
+app.get("/.well-known/oauth-authorization-server", (req, res) => {
+  res.json({
+    issuer: OAUTH_SERVER_URL,
+    authorization_endpoint: `${OAUTH_SERVER_URL}/authorize`,
+    token_endpoint: `${OAUTH_SERVER_URL}/token`,
+    registration_endpoint: `${OAUTH_SERVER_URL}/register`,
+    introspection_endpoint: `${OAUTH_SERVER_URL}/introspect`,
+    scopes_supported: SCOPES_SUPPORTED,
+    response_types_supported: ["code"],
+    grant_types_supported: ["authorization_code"],
+    code_challenge_methods_supported: ["S256"],
+    token_endpoint_auth_methods_supported: ["client_secret_post", "none"]
+  });
+});
+
+app.get("/.well-known/oauth-protected-resource", (req, res) => {
+  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  
+  res.json({
+    resource: `${baseUrl}/mcp`, // Your MCP server is the protected resource
+    authorization_servers: [OAUTH_SERVER_URL], // Where to get tokens
+    scopes_supported: SCOPES_SUPPORTED,
+    bearer_methods_supported: ["header"],
+    introspection_endpoint: `${OAUTH_SERVER_URL}/introspect`
+  });
+});
+
+
+// Optional Bearer auth middleware (only for MCP endpoints)
 app.use(async (req, res, next) => {
   if (!REQUIRE_AUTH) return next();
+  
+  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  const resource = `${baseUrl}/mcp`;
+  const resourceMetadataUrl = `${baseUrl}/.well-known/oauth-protected-resource`;
+  
   try {
     const auth = req.headers.authorization;
-    if (!auth) return res.status(401).json({ error: "missing_authorization" });
+    if (!auth) {
+      res.set('WWW-Authenticate', `Bearer resource_metadata="${resourceMetadataUrl}", scope="mcp:tools"`);
+      return res.status(401).json({ error: "missing_authorization" });
+    }
     const [type, token] = auth.split(" ");
-    if (!token || type.toLowerCase() !== "bearer") return res.status(401).json({ error: "invalid_authorization" });
-    const info = await verifyAccessToken(token);
-    if (info.expiresAt < Math.floor(Date.now() / 1000)) return res.status(401).json({ error: "token_expired" });
+    if (!token || type.toLowerCase() !== "bearer") {
+      res.set('WWW-Authenticate', `Bearer resource_metadata="${resourceMetadataUrl}", scope="mcp:tools"`);
+      return res.status(401).json({ error: "invalid_authorization" });
+    }
+    const info = await verifyAccessToken(token, resource);
+    if (info.expiresAt < Math.floor(Date.now() / 1000)) {
+      res.set('WWW-Authenticate', `Bearer resource_metadata="${resourceMetadataUrl}", scope="mcp:tools"`);
+      return res.status(401).json({ error: "token_expired" });
+    }
     (req as any).auth = info;
     next();
   } catch (e: any) {
+    res.set('WWW-Authenticate', `Bearer resource_metadata="${resourceMetadataUrl}", scope="mcp:tools"`);
     return res.status(401).json({ error: "invalid_token", message: String(e?.message ?? e) });
   }
 });
@@ -193,7 +247,42 @@ app.delete("/mcp", async (req: Request, res: Response) => {
   await t.handleRequest(req, res);
 });
 
+
+// Simple info page for testing
+app.get("/", (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+      <head><title>MCP Server</title></head>
+      <body>
+        <h1>MCP Server</h1>
+        <p>This is the MCP server with OAuth integration.</p>
+        <p>OAuth server runs separately on port 3001.</p>
+        <h2>MCP Endpoints:</h2>
+        <ul>
+          <li><a href="/.well-known/oauth-authorization-server">OAuth Authorization Server Metadata</a></li>
+          <li><a href="/.well-known/oauth-protected-resource">OAuth Protected Resource Metadata</a></li>
+          <li><a href="${OAUTH_SERVER_URL}">OAuth Server (Port 3001)</a></li>
+        </ul>
+        <h2>MCP Endpoint:</h2>
+        <ul>
+          <li><code>POST /mcp</code> - MCP JSON-RPC endpoint</li>
+          <li><code>GET /mcp</code> - MCP SSE stream</li>
+        </ul>
+      </body>
+    </html>
+  `);
+});
+
 app.listen(PORT, () => {
-  console.log(`MCP server listening on http://localhost:${PORT}/mcp`);
-  if (REQUIRE_AUTH) console.log(`Using introspection at ${OAUTH_INTROSPECT_URL}`);
+  console.log(`🚀 MCP server listening on http://localhost:${PORT}/mcp`);
+  console.log(`📋 OAuth metadata at: http://localhost:${PORT}/.well-known/oauth-authorization-server`);
+  console.log(`🔒 Protected resource metadata at: http://localhost:${PORT}/.well-known/oauth-protected-resource`);
+  console.log(`ℹ️  Info page at: http://localhost:${PORT}/`);
+  console.log(`🔐 OAuth server: ${OAUTH_SERVER_URL}`);
+  if (REQUIRE_AUTH) {
+    console.log(`✅ Using OAuth introspection at ${OAUTH_INTROSPECT_URL}`);
+  } else {
+    console.log(`⚠️  OAuth disabled - no authentication required`);
+  }
 });
