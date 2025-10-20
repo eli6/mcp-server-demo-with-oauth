@@ -5,7 +5,12 @@ import { randomUUID, createHash, randomBytes } from "node:crypto";
 // Config
 const AUTH_PORT = parseInt(process.env.AUTH_PORT || "3001", 10);
 const ISSUER = new URL(process.env.ISSUER_URL || `http://localhost:${AUTH_PORT}`);
-const SCOPES_SUPPORTED = ["mcp:tools", "elins:dream"];
+const SCOPES_SUPPORTED = [
+  "mcp:tools",
+  "openid",
+  "profile",
+  "email",
+];
 
 // In-memory stores
 type Client = {
@@ -68,7 +73,7 @@ app.post("/register", (req, res) => {
   const {
     client_name,
     redirect_uris,
-    token_endpoint_auth_method = "client_secret_post",
+    token_endpoint_auth_method = "none",
     scope = SCOPES_SUPPORTED.join(" ")
   } = req.body ?? {};
 

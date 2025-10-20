@@ -6,52 +6,92 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest, CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { createRemoteJWKSet, jwtVerify, JWTPayload } from "jose";
 
 // Config
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const OAUTH_SERVER_URL = process.env.OAUTH_SERVER_URL || "http://localhost:3001";
 const DISABLE_AUTH = String(process.env.DISABLE_AUTH || "").toLowerCase() === "true" || process.env.DISABLE_AUTH === "1";
+const AUTH_TOKEN_MODE = (process.env.AUTH_TOKEN_MODE || "introspection").toLowerCase() as "introspection" | "jwt";
 const OAUTH_INTROSPECT_URL = process.env.OAUTH_INTROSPECT_URL || `${OAUTH_SERVER_URL}/introspect`;
+const JWT_ISSUER = process.env.JWT_ISSUER; // e.g., https://your-tenant.auth0.com/
+const JWT_AUDIENCE = process.env.JWT_AUDIENCE; // expected aud/resource, optional depending on IdP
+const JWT_JWKS_URL = process.env.JWT_JWKS_URL || (JWT_ISSUER ? `${JWT_ISSUER.replace(/\/$/, "")}/.well-known/jwks.json` : undefined);
 const REQUIRE_AUTH = !DISABLE_AUTH;
 const SCOPES_SUPPORTED = ["mcp:tools", "openid", "profile", "email"];
 
-// Simple Bearer auth using introspection (opaque tokens)
+// Bearer auth supporting either introspection (opaque tokens) or JWT validation (JWKS)
 async function verifyAccessToken(token: string, expectedResource?: string) {
   if (!REQUIRE_AUTH) return { clientId: "dev", scopes: [], expiresAt: Math.floor(Date.now() / 1000) + 3600 };
-  
-  // Use external introspection (OAuth server)
-  const res = await fetch(OAUTH_INTROSPECT_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ token }).toString()
-  });
-  if (!res.ok) throw new Error(`Introspection failed: ${res.status}`);
-  const data = await res.json();
-  if (!data.active) throw new Error("Token inactive");
-  
-  // Validate audience/resource for external tokens
-  if (expectedResource && data.aud && data.aud !== expectedResource) {
-    throw new Error("Token not intended for this resource");
+
+  if (AUTH_TOKEN_MODE === "jwt") {
+    if (!JWT_JWKS_URL) throw new Error("JWT_JWKS_URL or JWT_ISSUER required for JWT mode");
+    const JWKS = createRemoteJWKSet(new URL(JWT_JWKS_URL));
+    const { payload } = await jwtVerify(token, JWKS, {
+      issuer: JWT_ISSUER,
+      audience: JWT_AUDIENCE,
+      algorithms: ["RS256"]
+    });
+
+    const scopes = parseScopes(payload);
+    const exp = typeof payload.exp === "number" ? payload.exp : Math.floor(Date.now() / 1000) + 3600;
+    if (expectedResource && payload.aud && typeof payload.aud === "string" && payload.aud !== expectedResource) {
+      console.warn(`[auth] audience mismatch: token.aud="${payload.aud}" expected="${expectedResource}"`);
+      throw new Error("Token not intended for this resource");
+    }
+    return {
+      clientId: (payload.client_id as string) || (payload.sub as string) || "unknown",
+      scopes,
+      expiresAt: exp,
+    };
+  } else {
+    // Use external introspection (opaque tokens)
+    const res = await fetch(OAUTH_INTROSPECT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token }).toString()
+    });
+    if (!res.ok) throw new Error(`Introspection failed: ${res.status}`);
+    const data = await res.json();
+    if (!data.active) throw new Error("Token inactive");
+
+    if (expectedResource && data.aud && data.aud !== expectedResource) {
+      console.warn(`[auth] audience mismatch: token.aud="${data.aud}" expected="${expectedResource}"`);
+      throw new Error("Token not intended for this resource");
+    }
+    return {
+      clientId: data.client_id ?? "unknown",
+      scopes: (data.scope ? String(data.scope).split(" ") : []) as string[],
+      expiresAt: typeof data.exp === "number" ? data.exp : Math.floor(Date.now() / 1000) + 3600
+    };
   }
-  
-  return {
-    clientId: data.client_id ?? "unknown",
-    scopes: (data.scope ? String(data.scope).split(" ") : []) as string[],
-    expiresAt: typeof data.exp === "number" ? data.exp : Math.floor(Date.now() / 1000) + 3600
-  };
+}
+
+function parseScopes(payload: JWTPayload): string[] {
+  const raw = (payload.scope as string) || (payload.scp as string) || undefined;
+  if (!raw) return [];
+  return String(raw).split(" ").filter(Boolean);
 }
 
 const app = express();
+// Respect X-Forwarded-* headers from reverse proxies (so req.protocol becomes https)
 app.use(express.json());
 app.use(cors({ origin: "*", exposedHeaders: ["Mcp-Session-Id"] }));
+
+// Simple request logger
+app.use((req, _res, next) => {
+  const hasAuth = req.headers.authorization ? "yes" : "no";
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl} auth:${hasAuth} accept:${req.headers['accept'] || ''}`);
+  next();
+});
 
 // OAuth metadata endpoints (MUST be public - no auth required)
 app.get("/.well-known/oauth-authorization-server", (req, res) => {
   res.json({
     issuer: OAUTH_SERVER_URL,
-    authorization_endpoint: `${OAUTH_SERVER_URL}/authorize`,
-    token_endpoint: `${OAUTH_SERVER_URL}/token`,
-    registration_endpoint: `${OAUTH_SERVER_URL}/register`,
+    authorization_endpoint: `${OAUTH_SERVER_URL}/oidc/authorize`,
+    token_endpoint: `${OAUTH_SERVER_URL}/oauth/token`,
+    registration_endpoint: `${OAUTH_SERVER_URL}/oidc/register`,
     introspection_endpoint: `${OAUTH_SERVER_URL}/introspect`,
     scopes_supported: SCOPES_SUPPORTED,
     response_types_supported: ["code"],
@@ -65,7 +105,7 @@ app.get("/.well-known/oauth-protected-resource", (req, res) => {
   const baseUrl = `${req.protocol}://${req.get('host')}`;
   
   res.json({
-    resource: `${baseUrl}/mcp`, // Your MCP server is the protected resource
+    resource: `${baseUrl}`, // Your MCP server is the protected resource
     authorization_servers: [OAUTH_SERVER_URL], // Where to get tokens
     scopes_supported: SCOPES_SUPPORTED,
     bearer_methods_supported: ["header"],
@@ -79,28 +119,33 @@ app.use(async (req, res, next) => {
   if (!REQUIRE_AUTH) return next();
   
   const baseUrl = `${req.protocol}://${req.get('host')}`;
-  const resource = `${baseUrl}/mcp`;
+  // Prefer configured audience to avoid http/https host-derived mismatches
+  const expectedResource = JWT_AUDIENCE || `${baseUrl}/mcp`;
   const resourceMetadataUrl = `${baseUrl}/.well-known/oauth-protected-resource`;
   
   try {
     const auth = req.headers.authorization;
     if (!auth) {
+      console.warn(`[auth] missing authorization for ${req.method} ${req.originalUrl}`);
       res.set('WWW-Authenticate', `Bearer resource_metadata="${resourceMetadataUrl}", scope="mcp:tools"`);
       return res.status(401).json({ error: "missing_authorization" });
     }
     const [type, token] = auth.split(" ");
     if (!token || type.toLowerCase() !== "bearer") {
+      console.warn(`[auth] invalid authorization header for ${req.method} ${req.originalUrl}: ${auth}`);
       res.set('WWW-Authenticate', `Bearer resource_metadata="${resourceMetadataUrl}", scope="mcp:tools"`);
       return res.status(401).json({ error: "invalid_authorization" });
     }
-    const info = await verifyAccessToken(token, resource);
+    const info = await verifyAccessToken(token, expectedResource);
     if (info.expiresAt < Math.floor(Date.now() / 1000)) {
+      console.warn(`[auth] token expired for client ${info.clientId}`);
       res.set('WWW-Authenticate', `Bearer resource_metadata="${resourceMetadataUrl}", scope="mcp:tools"`);
       return res.status(401).json({ error: "token_expired" });
     }
     (req as any).auth = info;
     next();
   } catch (e: any) {
+    console.warn(`[auth] invalid_token on ${req.method} ${req.originalUrl}: ${e?.message || e}`);
     res.set('WWW-Authenticate', `Bearer resource_metadata="${resourceMetadataUrl}", scope="mcp:tools"`);
     return res.status(401).json({ error: "invalid_token", message: String(e?.message ?? e) });
   }
@@ -178,6 +223,7 @@ app.post("/mcp", async (req: Request, res: Response) => {
   // Clients must accept both (per Streamable HTTP)
   const accept = String(req.headers["accept"] || "");
   if (!accept.includes("application/json") || !accept.includes("text/event-stream")) {
+    console.warn(`[mcp] 406 Not Acceptable: accept="${accept}"`);
     return res.status(406).json({
       jsonrpc: "2.0",
       error: {
@@ -282,7 +328,11 @@ app.listen(PORT, () => {
   console.log(`ℹ️  Info page at: http://localhost:${PORT}/`);
   console.log(`🔐 OAuth server: ${OAUTH_SERVER_URL}`);
   if (REQUIRE_AUTH) {
-    console.log(`✅ Using OAuth introspection at ${OAUTH_INTROSPECT_URL}`);
+    if (AUTH_TOKEN_MODE === "jwt") {
+      console.log(`✅ Using JWT validation via JWKS (${JWT_JWKS_URL || "(derived from issuer)"})`);
+    } else {
+      console.log(`✅ Using OAuth introspection at ${OAUTH_INTROSPECT_URL}`);
+    }
   } else {
     console.log(`⚠️  OAuth disabled - no authentication required`);
   }

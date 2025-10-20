@@ -10,6 +10,13 @@ This guide shows a minimal, copy‑ready flow to run:
 
 Use this as the README for a bare server repo.
 
+## 0) Docker quickstart (no auth)
+
+```bash
+npm run docker:build
+npm run docker:run
+```
+
 ## 1) Install and start
 
 Install dependencies:
@@ -24,17 +31,55 @@ Start the OAuth demo (port 3001):
 npm run dev:oauth
 ```
 
-Start the MCP server (port 3000) with token validation via introspection:
+Start the MCP server (port 3000). By default, local runs use opaque tokens via the demo OAuth server (introspection mode). Place your env in `.env` and run dev for hot reload:
 
 ```bash
-OAUTH_INTROSPECT_URL=http://localhost:3001/introspect npm run dev
+# .env (local opaque token default)
+# OAUTH_SERVER_URL defaults to http://localhost:3001
+# OAUTH_INTROSPECT_URL defaults to ${OAUTH_SERVER_URL}/introspect
+
+DISABLE_AUTH=false
+AUTH_TOKEN_MODE=introspection
+
+npm run dev
 ```
 
-**Note**: The MCP server automatically points to the OAuth server at `http://localhost:3001` for all OAuth metadata and token validation.
-
-Tip: If you want to run MCP without auth locally, omit the env var:
+Tip: If you want to run MCP without auth locally, set the explicit flag (in env or inline):
 
 ```bash
+DISABLE_AUTH=true npm run dev
+```
+
+### Token modes: introspection (local default) or JWT (managed IdP)
+
+This server supports two auth modes, controlled by `AUTH_TOKEN_MODE`:
+
+- `introspection` (default): Validate opaque tokens via `OAUTH_INTROSPECT_URL` (RFC 7662).
+- `jwt`: Validate JWT access tokens using JWKS.
+
+Local default uses opaque tokens (no JWT config required). For a managed IdP that issues JWT access tokens, switch to JWT mode and set these:
+
+```
+DISABLE_AUTH=false
+AUTH_TOKEN_MODE=jwt
+JWT_ISSUER=https://your-tenant.example.com/
+JWT_AUDIENCE=https://api.example.com   # optional depending on IdP
+# JWT_JWKS_URL defaults to ${JWT_ISSUER}/.well-known/jwks.json
+```
+
+Example run with a managed IdP (JWT mode):
+
+```bash
+# .env
+DISABLE_AUTH=false
+AUTH_TOKEN_MODE=jwt
+JWT_ISSUER=https://your-tenant.example.com/
+# Optional, depends on IdP
+JWT_AUDIENCE=https://api.example.com
+# Optional override if issuer does not expose well-known JWKS
+# JWT_JWKS_URL=https://your-tenant.example.com/.well-known/jwks.json
+OAUTH_SERVER_URL=https://your-tentant-url.com
+
 npm run dev
 ```
 

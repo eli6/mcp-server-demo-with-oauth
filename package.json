@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "dev": "tsx --watch src/server.ts",
+    "dev": "tsx --watch src/start.ts",
     "dev:oauth": "tsx --watch src/oauth.ts",
-    "start": "tsx src/server.ts",
+    "start": "tsx src/start.ts",
     "start:oauth": "tsx src/oauth.ts",
     "docker:build": "docker build -t mcp-pluggdax-bare:dev .",
     "docker:run": "docker run --rm -p 3000:3000 --name mcp-pluggdax mcp-pluggdax-bare:dev",
@@ -20,6 +20,8 @@
     "@modelcontextprotocol/sdk": "^1.20.0",
     "cors": "^2.8.5",
     "express": "^5.1.0",
+    "dotenv": "^16.4.5",
+    "jose": "^5.10.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
