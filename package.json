@@ -4,8 +4,10 @@
   "main": "index.js",
   "scripts": {
     "dev": "tsx --watch src/start.ts",
+    "dev:ui": "tsx --watch src/server-with-ui.ts",
     "dev:oauth": "tsx --watch src/oauth.ts",
     "start": "tsx src/start.ts",
+    "start:ui": "tsx src/server-with-ui.ts",
     "start:oauth": "tsx src/oauth.ts",
     "docker:build": "docker build -t mcp-pluggdax-bare:dev .",
     "docker:run": "docker run --rm -p 3000:3000 --name mcp-pluggdax mcp-pluggdax-bare:dev",

@@ -31,8 +31,9 @@ Start the OAuth demo (port 3001):
 npm run dev:oauth
 ```
 
-Start the MCP server (port 3000). By default, local runs use opaque tokens via the demo OAuth server (introspection mode). Place your env in `.env` and run dev for hot reload:
+## Development modes
 
+**Pure MCP (default):**
 ```bash
 # .env (local opaque token default)
 # OAUTH_SERVER_URL defaults to http://localhost:3001
@@ -43,6 +44,14 @@ AUTH_TOKEN_MODE=introspection
 
 npm run dev
 ```
+
+**MCP + UI Components:**
+```bash
+# Same .env as above
+npm run dev:ui
+```
+
+The pure MCP mode focuses on core MCP functionality (auth, tools, endpoints). The UI mode adds rich component experiences with interactive forms and visual feedback.
 
 Tip: If you want to run MCP without auth locally, set the explicit flag (in env or inline):
 
@@ -195,6 +204,10 @@ curl -i -X POST http://localhost:3000/mcp \
   -H "Mcp-Session-Id: SESSION_ID" \
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"greet","arguments":{"name":"Elin"}}}'
 ```
+
+**UI Mode:** The `greet` tool renders a simple component with an input field. In rich-UI clients, it is associated with the template `ui://widget/greet.html` and can initiate tool calls from the iframe when supported. The tool also returns `structuredContent` with `{ name, greeting }` so the component can hydrate initial UI state.
+
+**Pure MCP Mode:** The `greet` tool returns simple text responses without UI components, perfect for learning MCP fundamentals.
 
 Call `count`:
 

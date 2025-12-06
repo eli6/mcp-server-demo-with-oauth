@@ -15,7 +15,7 @@ COPY src ./src
 EXPOSE 3000
 
 # Explicitly disable auth by default in this image (can override at runtime)
-ENV DISABLE_AUTH=true
+#ENV DISABLE_AUTH=false
 
 # Start the MCP server (uses devDependency tsx)
-CMD ["npm", "run", "start"]
+CMD ["npm", "run", "start:ui"]
