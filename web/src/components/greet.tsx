@@ -35,15 +35,33 @@ export function GreetWidget() {
   const [greeting, setGreeting] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  // Hydrate from initial tool output
+  // Hydrate from initial tool output and listen for updates
   useEffect(() => {
-    const toolOutput = (window.openai?.toolOutput as ToolOutput) || {};
-    if (toolOutput.greeting) {
-      setGreeting(toolOutput.greeting);
-    }
-    if (toolOutput.name) {
-      setName(toolOutput.name);
-    }
+    const updateFromToolOutput = () => {
+      const toolOutput = (window.openai?.toolOutput as ToolOutput) || {};
+      if (toolOutput.greeting) {
+        setGreeting(toolOutput.greeting);
+      }
+      if (toolOutput.name) {
+        setName(toolOutput.name);
+      }
+    };
+
+    // Initial load
+    updateFromToolOutput();
+
+    // Listen for updates from the host
+    const handleSetGlobals = (event: Event) => {
+      const customEvent = event as CustomEvent<{ globals?: Partial<{ toolOutput?: ToolOutput }> }>;
+      if (customEvent.detail?.globals?.toolOutput !== undefined) {
+        updateFromToolOutput();
+      }
+    };
+
+    window.addEventListener('openai:set_globals', handleSetGlobals);
+    return () => {
+      window.removeEventListener('openai:set_globals', handleSetGlobals);
+    };
   }, []);
 
   const handleGreet = async () => {
@@ -150,11 +168,32 @@ export function GreetWidget() {
   );
 }
 
-// Mount the component when used standalone (for MCP server build)
-if (typeof window !== 'undefined' && !document.getElementById('root')) {
-  const root = document.createElement('div');
-  document.body.appendChild(root);
-  const reactRoot = createRoot(root);
-  reactRoot.render(<GreetWidget />);
+// Wait for window.openai to be available before mounting
+function waitForOpenAI() {
+  if (window.openai) {
+    mountComponent();
+  } else {
+    // Listen for the openai:set_globals event
+    window.addEventListener('openai:set_globals', mountComponent, { once: true });
+    // Fallback: check periodically (in case event doesn't fire)
+    const checkInterval = setInterval(() => {
+      if (window.openai) {
+        clearInterval(checkInterval);
+        mountComponent();
+      }
+    }, 50);
+    // Cleanup after 5 seconds if still not available
+    setTimeout(() => clearInterval(checkInterval), 5000);
+  }
 }
+
+function mountComponent() {
+  const root = document.getElementById('root');
+  if (root) {
+    const reactRoot = createRoot(root);
+    reactRoot.render(<GreetWidget />);
+  }
+}
+
+waitForOpenAI();
 

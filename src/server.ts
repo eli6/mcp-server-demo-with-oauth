@@ -193,7 +193,7 @@ app.get("/", (req, res) => {
   `);
 });
 
-app.listen(PORT, async () => {
+app.listen(PORT, '0.0.0.0', async () => {
   const TOOL_MODE = (process.env.TOOL_MODE || "basic").toLowerCase();
   console.log(`🚀 MCP server listening on http://localhost:${PORT}/mcp`);
   console.log(`📦 Tool mode: ${TOOL_MODE}`);

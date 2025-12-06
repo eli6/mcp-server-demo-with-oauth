@@ -38,18 +38,17 @@ export function registerTools(mcp: McpServer) {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Greet</title>
-  </head>
-  <body>
-    <div id="root"></div>
     <script type="importmap">
       {
         "imports": {
           "react": "https://esm.sh/react@18",
-          "react-dom": "https://esm.sh/react-dom@18",
           "react-dom/client": "https://esm.sh/react-dom@18/client"
         }
       }
     </script>
+  </head>
+  <body>
+    <div id="root"></div>
     <script type="module">
       ${greetBundle || 'console.error("React bundle not loaded. Run npm run build:web");'}
     </script>
