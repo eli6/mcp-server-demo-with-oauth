@@ -15,57 +15,135 @@ export interface AuthResult {
   expiresAt: number;
 }
 
+async function verifyJwtToken(
+  token: string,
+  config: AuthConfig,
+  expectedResource?: string
+): Promise<AuthResult> {
+  if (!config.JWT_JWKS_URL) {
+    throw new Error("JWT_JWKS_URL or JWT_ISSUER required for JWT mode");
+  }
+
+  const JWKS = createRemoteJWKSet(new URL(config.JWT_JWKS_URL));
+  const { payload } = await jwtVerify(token, JWKS, {
+    issuer: config.JWT_ISSUER,
+    audience: config.JWT_AUDIENCE,
+    algorithms: ["RS256"]
+  });
+
+  const scopes = parseScopes(payload);
+  
+  if (typeof payload.exp !== "number") {
+    throw new Error("Token missing required exp claim");
+  }
+  const expiresAt = payload.exp;
+
+  if (expectedResource && payload.aud) {
+    const audiences = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+    if (!audiences.includes(expectedResource)) {
+      console.warn(`[auth] audience mismatch: token.aud="${JSON.stringify(payload.aud)}" expected="${expectedResource}"`);
+      throw new Error("Token not intended for this resource");
+    }
+  }
+
+  return {
+    clientId: (payload.client_id as string) || (payload.sub as string) || "unknown",
+    scopes,
+    expiresAt
+  };
+}
+
+async function verifyTokenViaIntrospection(
+  token: string,
+  config: AuthConfig,
+  expectedResource?: string
+): Promise<AuthResult> {
+  const response = await fetch(config.OAUTH_INTROSPECT_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ token }).toString()
+  });
+
+  if (!response.ok) {
+    throw new Error(`Introspection failed: ${response.status}`);
+  }
+
+  const data = await response.json();
+  if (!data.active) {
+    throw new Error("Token inactive");
+  }
+
+  if (expectedResource && data.aud && data.aud !== expectedResource) {
+    console.warn(`[auth] audience mismatch: token.aud="${data.aud}" expected="${expectedResource}"`);
+    throw new Error("Token not intended for this resource");
+  }
+
+  return {
+    clientId: data.client_id ?? "unknown",
+    scopes: (data.scope ? String(data.scope).split(" ") : []) as string[],
+    expiresAt: typeof data.exp === "number" 
+      ? data.exp 
+      : Math.floor(Date.now() / 1000) + 3600
+  };
+}
+
 // Bearer auth supporting either introspection (opaque tokens) or JWT validation (JWKS)
-export async function verifyAccessToken(token: string, config: AuthConfig, expectedResource?: string): Promise<AuthResult> {
-  if (!config.DISABLE_AUTH) return { clientId: "dev", scopes: [], expiresAt: Math.floor(Date.now() / 1000) + 3600 };
-
-  if (config.AUTH_TOKEN_MODE === "jwt") {
-    if (!config.JWT_JWKS_URL) throw new Error("JWT_JWKS_URL or JWT_ISSUER required for JWT mode");
-    const JWKS = createRemoteJWKSet(new URL(config.JWT_JWKS_URL));
-    const { payload } = await jwtVerify(token, JWKS, {
-      issuer: config.JWT_ISSUER,
-      audience: config.JWT_AUDIENCE,
-      algorithms: ["RS256"]
-    });
-
-    const scopes = parseScopes(payload);
-    const exp = typeof payload.exp === "number" ? payload.exp : Math.floor(Date.now() / 1000) + 3600;
-    if (expectedResource && payload.aud && typeof payload.aud === "string" && payload.aud !== expectedResource) {
-      console.warn(`[auth] audience mismatch: token.aud="${payload.aud}" expected="${expectedResource}"`);
-      throw new Error("Token not intended for this resource");
-    }
-    return {
-      clientId: (payload.client_id as string) || (payload.sub as string) || "unknown",
-      scopes,
-      expiresAt: exp,
-    };
-  } else {
-    // Use external introspection (opaque tokens)
-    const res = await fetch(config.OAUTH_INTROSPECT_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ token }).toString()
-    });
-    if (!res.ok) throw new Error(`Introspection failed: ${res.status}`);
-    const data = await res.json();
-    if (!data.active) throw new Error("Token inactive");
-
-    if (expectedResource && data.aud && data.aud !== expectedResource) {
-      console.warn(`[auth] audience mismatch: token.aud="${data.aud}" expected="${expectedResource}"`);
-      throw new Error("Token not intended for this resource");
-    }
-    return {
-      clientId: data.client_id ?? "unknown",
-      scopes: (data.scope ? String(data.scope).split(" ") : []) as string[],
-      expiresAt: typeof data.exp === "number" ? data.exp : Math.floor(Date.now() / 1000) + 3600
+export async function verifyAccessToken(
+  token: string, 
+  config: AuthConfig, 
+  expectedResource?: string
+): Promise<AuthResult> {
+  if (config.DISABLE_AUTH) {
+    return { 
+      clientId: "dev", 
+      scopes: [], 
+      expiresAt: Math.floor(Date.now() / 1000) + 3600 
     };
   }
+
+  if (config.AUTH_TOKEN_MODE === "jwt") {
+    return await verifyJwtToken(token, config, expectedResource);
+  }
+
+  return await verifyTokenViaIntrospection(token, config, expectedResource);
 }
 
 export function parseScopes(payload: JWTPayload): string[] {
   const raw = (payload.scope as string) || (payload.scp as string) || undefined;
   if (!raw) return [];
   return String(raw).split(" ").filter(Boolean);
+}
+
+function extractBearerToken(authorizationHeader: string | undefined): string | null {
+  if (!authorizationHeader) {
+    return null;
+  }
+  
+  const [type, token] = authorizationHeader.split(" ");
+  if (!token || type.toLowerCase() !== "bearer") {
+    return null;
+  }
+  
+  return token;
+}
+
+function isTokenExpired(authInfo: AuthResult): boolean {
+  const currentTime = Math.floor(Date.now() / 1000);
+  return authInfo.expiresAt < currentTime;
+}
+
+function sendUnauthorizedResponse(
+  res: any,
+  resourceMetadataUrl: string,
+  error: string,
+  message?: string
+): void {
+  res.set('WWW-Authenticate', `Bearer resource_metadata="${resourceMetadataUrl}", scope="mcp:tools"`);
+  const responseBody: any = { error };
+  if (message) {
+    responseBody.message = message;
+  }
+  res.status(401).json(responseBody);
 }
 
 export function createAuthMiddleware(config: AuthConfig) {
@@ -78,30 +156,26 @@ export function createAuthMiddleware(config: AuthConfig) {
     const resourceMetadataUrl = `${baseUrl}/.well-known/oauth-protected-resource`;
     
     try {
-      const auth = req.headers.authorization;
-      if (!auth) {
-        console.warn(`[auth] missing authorization for ${req.method} ${req.originalUrl}`);
-        res.set('WWW-Authenticate', `Bearer resource_metadata="${resourceMetadataUrl}", scope="mcp:tools"`);
-        return res.status(401).json({ error: "missing_authorization" });
+      const token = extractBearerToken(req.headers.authorization);
+      if (!token) {
+        console.warn(`[auth] missing or invalid authorization for ${req.method} ${req.originalUrl}`);
+        sendUnauthorizedResponse(res, resourceMetadataUrl, "missing_authorization");
+        return;
       }
-      const [type, token] = auth.split(" ");
-      if (!token || type.toLowerCase() !== "bearer") {
-        console.warn(`[auth] invalid authorization header for ${req.method} ${req.originalUrl}: ${auth}`);
-        res.set('WWW-Authenticate', `Bearer resource_metadata="${resourceMetadataUrl}", scope="mcp:tools"`);
-        return res.status(401).json({ error: "invalid_authorization" });
+
+      const authInfo = await verifyAccessToken(token, config, expectedResource);
+      
+      if (isTokenExpired(authInfo)) {
+        console.warn(`[auth] token expired for client ${authInfo.clientId}`);
+        sendUnauthorizedResponse(res, resourceMetadataUrl, "token_expired");
+        return;
       }
-      const info = await verifyAccessToken(token, config, expectedResource);
-      if (info.expiresAt < Math.floor(Date.now() / 1000)) {
-        console.warn(`[auth] token expired for client ${info.clientId}`);
-        res.set('WWW-Authenticate', `Bearer resource_metadata="${resourceMetadataUrl}", scope="mcp:tools"`);
-        return res.status(401).json({ error: "token_expired" });
-      }
-      req.auth = info;
+
+      req.auth = authInfo;
       next();
-    } catch (e: any) {
-      console.warn(`[auth] invalid_token on ${req.method} ${req.originalUrl}: ${e?.message || e}`);
-      res.set('WWW-Authenticate', `Bearer resource_metadata="${resourceMetadataUrl}", scope="mcp:tools"`);
-      return res.status(401).json({ error: "invalid_token", message: String(e?.message ?? e) });
+    } catch (error: any) {
+      console.warn(`[auth] invalid_token on ${req.method} ${req.originalUrl}: ${error?.message || error}`);
+      sendUnauthorizedResponse(res, resourceMetadataUrl, "invalid_token", String(error?.message ?? error));
     }
   };
 }

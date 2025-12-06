@@ -18,9 +18,6 @@ RUN if [ -f web/package.json ]; then \
 COPY tsconfig.json ./
 COPY src ./src
 
-# Note: web/dist is created during the build step above (line 12-14)
-# No need to copy it from host - it's built inside the container
-
 # App listens on 3000
 EXPOSE 3000
 
