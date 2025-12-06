@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
-export function registerBasicTools(mcp: McpServer) {
+export function registerTools(mcp: McpServer) {
   // Simple greet tool (no UI)
   mcp.registerTool(
     "greet",

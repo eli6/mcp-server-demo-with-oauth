@@ -3,19 +3,27 @@
 FROM node:20-alpine
 WORKDIR /app
 
-# Install dependencies with caching
+# Install root dependencies with caching
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
+
+# Build web components if web/ directory exists (for React UI mode)
+# Copy entire web directory (package.json, src/, tsconfig.json)
+COPY web/ ./web/
+RUN if [ -f web/package.json ]; then \
+      cd web && npm ci && npm run build; \
+    fi
 
 # Copy source
 COPY tsconfig.json ./
 COPY src ./src
 
+# Note: web/dist is created during the build step above (line 12-14)
+# No need to copy it from host - it's built inside the container
+
 # App listens on 3000
 EXPOSE 3000
 
-# Explicitly disable auth by default in this image (can override at runtime)
-#ENV DISABLE_AUTH=false
-
+# Tool mode: basic (default), ui-html, or ui-react
 # Start the MCP server (uses devDependency tsx)
-CMD ["npm", "run", "start:ui"]
+CMD ["npm", "run", "start:ui-react"]

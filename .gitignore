@@ -1,2 +1,7 @@
 /node_modules
+node_modules/
 *env
+
+# Web build artifacts
+web/dist/
+web/node_modules/

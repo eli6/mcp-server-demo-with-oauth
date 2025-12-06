@@ -5,7 +5,8 @@ import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import { registerBasicTools } from "./tools/basic.js";
+// Tool registration is determined by TOOL_MODE environment variable
+// Options: "basic" (default), "ui-html", "ui-react"
 import { createAuthMiddleware, AuthConfig } from "./lib/auth.js";
 import { registerOAuthEndpoints, OAuthConfig } from "./lib/oauth-metadata.js";
 
@@ -56,7 +57,7 @@ registerOAuthEndpoints(app, oauthConfig);
 app.use(createAuthMiddleware(authConfig));
 
 // Build MCP server instance
-function buildMcp() {
+async function buildMcp() {
   const mcp = new McpServer({ 
     name: "minimal-mcp", 
     version: "0.1.0"
@@ -64,7 +65,19 @@ function buildMcp() {
     capabilities: { logging: {} } 
   });
 
-  registerBasicTools(mcp);
+  // Dynamically import tool registration based on TOOL_MODE
+  const TOOL_MODE = (process.env.TOOL_MODE || "basic").toLowerCase();
+  let registerTools;
+  
+  if (TOOL_MODE === "ui-html") {
+    registerTools = (await import("./tools/ui-html.js")).registerTools;
+  } else if (TOOL_MODE === "ui-react") {
+    registerTools = (await import("./tools/ui-react.js")).registerTools;
+  } else {
+    registerTools = (await import("./tools/basic.js")).registerTools;
+  }
+
+  registerTools(mcp);
   return mcp;
 }
 
@@ -111,7 +124,7 @@ app.post("/mcp", async (req: Request, res: Response) => {
         if (sid) delete transports[sid];
       };
 
-      const mcp = buildMcp();
+      const mcp = await buildMcp();
       await mcp.connect(t);
       await t.handleRequest(req, res, req.body);
       return;
@@ -150,17 +163,23 @@ app.delete("/mcp", async (req: Request, res: Response) => {
 
 // Simple info page for testing
 app.get("/", (req, res) => {
+  const TOOL_MODE = (process.env.TOOL_MODE || "basic").toLowerCase();
+  const modeDescription = 
+    TOOL_MODE === "ui-html" ? "with HTML UI components" :
+    TOOL_MODE === "ui-react" ? "with React UI components" :
+    "basic (no UI)";
+  
   res.send(`
     <!DOCTYPE html>
     <html>
       <head><title>MCP Server</title></head>
       <body>
         <h1>MCP Server</h1>
-        <p>This is the MCP server with OAuth integration.</p>
+        <p>This is the MCP server with OAuth integration (${modeDescription}).</p>
         <p>OAuth server runs separately on port 3001.</p>
+        <p><strong>Tool Mode:</strong> <code>${TOOL_MODE}</code></p>
         <h2>MCP Endpoints:</h2>
         <ul>
-          <li><a href="/.well-known/oauth-authorization-server">OAuth Authorization Server Metadata</a></li>
           <li><a href="/.well-known/oauth-protected-resource">OAuth Protected Resource Metadata</a></li>
           <li><a href="${OAUTH_SERVER_URL}">OAuth Server (Port 3001)</a></li>
         </ul>
@@ -174,9 +193,10 @@ app.get("/", (req, res) => {
   `);
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
+  const TOOL_MODE = (process.env.TOOL_MODE || "basic").toLowerCase();
   console.log(`🚀 MCP server listening on http://localhost:${PORT}/mcp`);
-  console.log(`📋 OAuth metadata at: http://localhost:${PORT}/.well-known/oauth-authorization-server`);
+  console.log(`📦 Tool mode: ${TOOL_MODE}`);
   console.log(`🔒 Protected resource metadata at: http://localhost:${PORT}/.well-known/oauth-protected-resource`);
   console.log(`ℹ️  Info page at: http://localhost:${PORT}/`);
   console.log(`🔐 OAuth server: ${OAUTH_SERVER_URL}`);
