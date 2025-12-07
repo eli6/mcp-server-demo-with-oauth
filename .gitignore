@@ -5,3 +5,7 @@ node_modules/
 # Web build artifacts
 web/dist/
 web/node_modules/
+
+
+.DS_Store
+**/.DS_Store

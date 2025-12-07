@@ -21,6 +21,17 @@ export function registerTools(mcp: McpServer) {
     console.warn('[ui-react] Falling back to basic HTML.');
   }
 
+  // Load CSS bundle
+  let greetCss = '';
+  try {
+    greetCss = readFileSync(
+      join(__dirname, '../../web/dist/greet.css'),
+      'utf-8'
+    );
+  } catch (error) {
+    console.warn('[ui-react] CSS bundle not found. Styles may not load correctly.');
+  }
+
   // Register React UI resource
   mcp.registerResource(
     "greet-ui",
@@ -38,6 +49,7 @@ export function registerTools(mcp: McpServer) {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Greet</title>
+    ${greetCss ? `<style>${greetCss}</style>` : ''}
     <script type="importmap">
       {
         "imports": {

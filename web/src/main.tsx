@@ -1,3 +1,6 @@
+// Must be imported first to ensure Tailwind layers and style foundations are defined before any potential component styles
+import "../styles/main.css"
+
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { GreetWidget } from './components/greet';
@@ -58,7 +61,9 @@ if (!rootElement) {
 
 const reactRoot = createRoot(rootElement);
 reactRoot.render(
-    <><h1>UI elements for this Chat GPT app</h1>
+  <>
+    <h1>UI elements for this Chat GPT app</h1>
     <h2>Greet:</h2><GreetWidget />
-</>);
+  </>
+);
 
