@@ -31,24 +31,123 @@ Start the OAuth demo (port 3001):
 npm run dev:oauth
 ```
 
-Start the MCP server (port 3000). By default, local runs use opaque tokens via the demo OAuth server (introspection mode). Place your env in `.env` and run dev for hot reload:
+## Tool Modes & Development
+
+This server supports three distinct tool modes, each optimized for different use cases. Choose the mode that best fits your needs:
+
+### 🛠️ Basic Tools Mode (Default)
+
+**Best for:** Learning MCP fundamentals, CLI tools, and simple text-based interactions.
+
+The basic mode provides core MCP functionality with simple text-based tool responses. Perfect for understanding the MCP protocol without UI complexity.
 
 ```bash
-# .env (local opaque token default)
-# OAUTH_SERVER_URL defaults to http://localhost:3001
-# OAUTH_INTROSPECT_URL defaults to ${OAUTH_SERVER_URL}/introspect
-
-DISABLE_AUTH=false
-AUTH_TOKEN_MODE=introspection
-
 npm run dev
 ```
 
-Tip: If you want to run MCP without auth locally, set the explicit flag (in env or inline):
+**Features:**
+- Pure MCP protocol implementation
+- Text-based tool responses
+- Minimal dependencies
+- Fast and lightweight
 
+### 🎨 HTML UI Mode
+
+**Best for:** Quick prototypes, simple forms, and lightweight interactive components.
+
+HTML UI mode enables rich, interactive components using vanilla HTML, CSS, and JavaScript. Components are served as standalone HTML files that can be embedded in MCP clients.
+
+```bash
+npm run dev:ui-html
+```
+
+**Features:**
+- Interactive HTML components
+- No build step required
+- Fast iteration
+- Lightweight bundle size
+
+### ⚛️ React UI Mode
+
+**Best for:** Complex, stateful components and modern React-based UIs.
+
+React UI mode provides full React component support with TypeScript, enabling sophisticated user interfaces with state management, hooks, and modern React patterns.
+
+```bash
+npm run dev:ui-react
+```
+
+**Features:**
+- Full React 18+ support
+- TypeScript for type safety
+- Component state management
+- Modern React patterns (hooks, context, etc.)
+
+### 🧪 React Component Development
+
+The `web/` directory contains a lightweight React development environment for designing and testing your UI components locally.
+
+**Start the development server:**
+```bash
+cd web
+npm run dev
+```
+
+This launches a Vite-powered dev server with:
+- ⚡ Hot module replacement (instant updates)
+- 🔍 Component preview in browser
+- 🎯 Mock `window.openai` API for testing
+- 📦 Automatic TypeScript compilation
+
+Edit `web/src/components/greet.tsx` and see your changes instantly. The mock API simulates tool calls, so you can develop and test your component's behavior without running the full MCP server.
+
+**Build for production:**
+```bash
+cd web
+npm run build
+```
+
+This generates `web/dist/greet.js`, which is automatically included when running the MCP server in React UI mode.
+
+### 🐳 Docker Configuration
+
+In production deployments, configure the tool mode by changing the `CMD` in your Dockerfile to use the appropriate npm script. The npm scripts already set the `TOOL_MODE` environment variable internally, so you don't need to set it separately.
+
+**Dockerfile:**
+```dockerfile
+# Choose the start script that matches your desired mode:
+# CMD ["npm", "run", "start"]           # Basic tools (default)
+# CMD ["npm", "run", "start:ui-html"]   # HTML UI
+CMD ["npm", "run", "start:ui-react"]    # React UI
+```
+
+**Examples for different modes:**
+```dockerfile
+# Basic mode (no UI)
+CMD ["npm", "run", "start"]
+
+# HTML UI mode  
+CMD ["npm", "run", "start:ui-html"]
+
+# React UI mode
+CMD ["npm", "run", "start:ui-react"]
+```
+
+The Dockerfile automatically builds React components during the image build process, so React UI mode is ready to use in production.
+
+---
+
+### Development Tips
+
+**Run without authentication (local testing):**
 ```bash
 DISABLE_AUTH=true npm run dev
 ```
+
+**Switch between modes:**
+- `npm run dev` → Basic tools
+- `npm run dev:ui-html` → HTML UI
+- `npm run dev:ui-react` → React UI (builds web components first)
 
 ### Token modes: introspection (local default) or JWT (managed IdP)
 
@@ -195,6 +294,13 @@ curl -i -X POST http://localhost:3000/mcp \
   -H "Mcp-Session-Id: SESSION_ID" \
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"greet","arguments":{"name":"Elin"}}}'
 ```
+
+**Tool mode differences:**
+- **Basic mode:** Returns simple text response: `"Hello, Elin!"`
+- **HTML UI mode:** Returns HTML component template (`ui://widget/greet.html`) with structured content for hydration
+- **React UI mode:** Returns React component template (`ui://widget/greet.js`) with full React support and state management
+
+In UI modes, rich clients can render interactive components that allow users to interact directly with the tool, and components can initiate tool calls via the `window.openai.callTool` API when supported.
 
 Call `count`:
 

@@ -1,12 +1,14 @@
 import express, { Request, Response } from "express";
 import cors from "cors";
 import { randomUUID } from "node:crypto";
-import { z } from "zod";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { isInitializeRequest, CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { createRemoteJWKSet, jwtVerify, JWTPayload } from "jose";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+// Tool registration is determined by TOOL_MODE environment variable
+// Options: "basic" (default), "ui-html", "ui-react"
+import { createAuthMiddleware, AuthConfig } from "./lib/auth.js";
+import { registerOAuthEndpoints, OAuthConfig } from "./lib/oauth-metadata.js";
 
 // Config
 const PORT = parseInt(process.env.PORT || "3000", 10);
@@ -17,61 +19,24 @@ const OAUTH_INTROSPECT_URL = process.env.OAUTH_INTROSPECT_URL || `${OAUTH_SERVER
 const JWT_ISSUER = process.env.JWT_ISSUER; // e.g., https://your-tenant.auth0.com/
 const JWT_AUDIENCE = process.env.JWT_AUDIENCE; // expected aud/resource, optional depending on IdP
 const JWT_JWKS_URL = process.env.JWT_JWKS_URL || (JWT_ISSUER ? `${JWT_ISSUER.replace(/\/$/, "")}/.well-known/jwks.json` : undefined);
-const REQUIRE_AUTH = !DISABLE_AUTH;
 const SCOPES_SUPPORTED = ["mcp:tools", "openid", "profile", "email"];
 
-// Bearer auth supporting either introspection (opaque tokens) or JWT validation (JWKS)
-async function verifyAccessToken(token: string, expectedResource?: string) {
-  if (!REQUIRE_AUTH) return { clientId: "dev", scopes: [], expiresAt: Math.floor(Date.now() / 1000) + 3600 };
+// Auth configuration
+const authConfig: AuthConfig = {
+  DISABLE_AUTH,
+  AUTH_TOKEN_MODE,
+  OAUTH_INTROSPECT_URL,
+  JWT_ISSUER,
+  JWT_AUDIENCE,
+  JWT_JWKS_URL
+};
 
-  if (AUTH_TOKEN_MODE === "jwt") {
-    if (!JWT_JWKS_URL) throw new Error("JWT_JWKS_URL or JWT_ISSUER required for JWT mode");
-    const JWKS = createRemoteJWKSet(new URL(JWT_JWKS_URL));
-    const { payload } = await jwtVerify(token, JWKS, {
-      issuer: JWT_ISSUER,
-      audience: JWT_AUDIENCE,
-      algorithms: ["RS256"]
-    });
+// OAuth configuration
+const oauthConfig: OAuthConfig = {
+  OAUTH_SERVER_URL,
+  SCOPES_SUPPORTED
+};
 
-    const scopes = parseScopes(payload);
-    const exp = typeof payload.exp === "number" ? payload.exp : Math.floor(Date.now() / 1000) + 3600;
-    if (expectedResource && payload.aud && typeof payload.aud === "string" && payload.aud !== expectedResource) {
-      console.warn(`[auth] audience mismatch: token.aud="${payload.aud}" expected="${expectedResource}"`);
-      throw new Error("Token not intended for this resource");
-    }
-    return {
-      clientId: (payload.client_id as string) || (payload.sub as string) || "unknown",
-      scopes,
-      expiresAt: exp,
-    };
-  } else {
-    // Use external introspection (opaque tokens)
-    const res = await fetch(OAUTH_INTROSPECT_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ token }).toString()
-    });
-    if (!res.ok) throw new Error(`Introspection failed: ${res.status}`);
-    const data = await res.json();
-    if (!data.active) throw new Error("Token inactive");
-
-    if (expectedResource && data.aud && data.aud !== expectedResource) {
-      console.warn(`[auth] audience mismatch: token.aud="${data.aud}" expected="${expectedResource}"`);
-      throw new Error("Token not intended for this resource");
-    }
-    return {
-      clientId: data.client_id ?? "unknown",
-      scopes: (data.scope ? String(data.scope).split(" ") : []) as string[],
-      expiresAt: typeof data.exp === "number" ? data.exp : Math.floor(Date.now() / 1000) + 3600
-    };
-  }
-}
-
-function parseScopes(payload: JWTPayload): string[] {
-  const raw = (payload.scope as string) || (payload.scp as string) || undefined;
-  if (!raw) return [];
-  return String(raw).split(" ").filter(Boolean);
-}
 
 const app = express();
 // Respect X-Forwarded-* headers from reverse proxies (so req.protocol becomes https)
@@ -85,74 +50,14 @@ app.use((req, _res, next) => {
   next();
 });
 
-// OAuth metadata endpoints (MUST be public - no auth required)
-app.get("/.well-known/oauth-authorization-server", (req, res) => {
-  res.json({
-    issuer: OAUTH_SERVER_URL,
-    authorization_endpoint: `${OAUTH_SERVER_URL}/oidc/authorize`,
-    token_endpoint: `${OAUTH_SERVER_URL}/oauth/token`,
-    registration_endpoint: `${OAUTH_SERVER_URL}/oidc/register`,
-    introspection_endpoint: `${OAUTH_SERVER_URL}/introspect`,
-    scopes_supported: SCOPES_SUPPORTED,
-    response_types_supported: ["code"],
-    grant_types_supported: ["authorization_code"],
-    code_challenge_methods_supported: ["S256"],
-    token_endpoint_auth_methods_supported: ["client_secret_post", "none"]
-  });
-});
-
-app.get("/.well-known/oauth-protected-resource", (req, res) => {
-  const baseUrl = `${req.protocol}://${req.get('host')}`;
-  
-  res.json({
-    resource: `${baseUrl}`, // Your MCP server is the protected resource
-    authorization_servers: [OAUTH_SERVER_URL], // Where to get tokens
-    scopes_supported: SCOPES_SUPPORTED,
-    bearer_methods_supported: ["header"],
-    introspection_endpoint: `${OAUTH_SERVER_URL}/introspect`
-  });
-});
-
+// Register OAuth metadata endpoints
+registerOAuthEndpoints(app, oauthConfig);
 
 // Optional Bearer auth middleware (only for MCP endpoints)
-app.use(async (req, res, next) => {
-  if (!REQUIRE_AUTH) return next();
-  
-  const baseUrl = `${req.protocol}://${req.get('host')}`;
-  // Prefer configured audience to avoid http/https host-derived mismatches
-  const expectedResource = JWT_AUDIENCE || `${baseUrl}/mcp`;
-  const resourceMetadataUrl = `${baseUrl}/.well-known/oauth-protected-resource`;
-  
-  try {
-    const auth = req.headers.authorization;
-    if (!auth) {
-      console.warn(`[auth] missing authorization for ${req.method} ${req.originalUrl}`);
-      res.set('WWW-Authenticate', `Bearer resource_metadata="${resourceMetadataUrl}", scope="mcp:tools"`);
-      return res.status(401).json({ error: "missing_authorization" });
-    }
-    const [type, token] = auth.split(" ");
-    if (!token || type.toLowerCase() !== "bearer") {
-      console.warn(`[auth] invalid authorization header for ${req.method} ${req.originalUrl}: ${auth}`);
-      res.set('WWW-Authenticate', `Bearer resource_metadata="${resourceMetadataUrl}", scope="mcp:tools"`);
-      return res.status(401).json({ error: "invalid_authorization" });
-    }
-    const info = await verifyAccessToken(token, expectedResource);
-    if (info.expiresAt < Math.floor(Date.now() / 1000)) {
-      console.warn(`[auth] token expired for client ${info.clientId}`);
-      res.set('WWW-Authenticate', `Bearer resource_metadata="${resourceMetadataUrl}", scope="mcp:tools"`);
-      return res.status(401).json({ error: "token_expired" });
-    }
-    (req as any).auth = info;
-    next();
-  } catch (e: any) {
-    console.warn(`[auth] invalid_token on ${req.method} ${req.originalUrl}: ${e?.message || e}`);
-    res.set('WWW-Authenticate', `Bearer resource_metadata="${resourceMetadataUrl}", scope="mcp:tools"`);
-    return res.status(401).json({ error: "invalid_token", message: String(e?.message ?? e) });
-  }
-});
+app.use(createAuthMiddleware(authConfig));
 
 // Build MCP server instance
-function buildMcp() {
+async function buildMcp() {
   const mcp = new McpServer({ 
     name: "minimal-mcp", 
     version: "0.1.0"
@@ -160,58 +65,19 @@ function buildMcp() {
     capabilities: { logging: {} } 
   });
 
-  // Simple greet tool
-  mcp.registerTool(
-    "greet",
-    {
-      title: "Greeting Tool",
-      description: "Say hello",
-      inputSchema: {
-        name: z.string().describe('Name to greet'),
-      },
-    },
-    async ({ name }): Promise<CallToolResult> => ({
-      content: [{ type: "text", text: `Hello, ${name}!` }]
-    })
-  );
-
-
-    mcp.tool(
-      'count',
-      'A tool that counts to a given number',
-      {
-        number: z.number().describe('Number to count to'),
-      },
-      {
-        title: 'Counting Tool',
-        readOnlyHint: true,
-        openWorldHint: false
-      },
-      async ({ number }, extra): Promise<CallToolResult> => {
-        const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-        let currentCount = 0;
-
-        while (currentCount < number) {
-          currentCount++;
-          await mcp.sendLoggingMessage({
-            level: "info",
-            data: `Counted to ${currentCount}`
-          }, extra.sessionId);
-          await sleep(1000);
-        }
+  // Dynamically import tool registration based on TOOL_MODE
+  const TOOL_MODE = (process.env.TOOL_MODE || "basic").toLowerCase();
+  let registerTools;
   
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Counting to ${number}`,
-            }
-          ],
-        };
-      }
-    );
+  if (TOOL_MODE === "ui-html") {
+    registerTools = (await import("./tools/ui-html.js")).registerTools;
+  } else if (TOOL_MODE === "ui-react") {
+    registerTools = (await import("./tools/ui-react.js")).registerTools;
+  } else {
+    registerTools = (await import("./tools/basic.js")).registerTools;
+  }
 
+  registerTools(mcp);
   return mcp;
 }
 
@@ -258,7 +124,7 @@ app.post("/mcp", async (req: Request, res: Response) => {
         if (sid) delete transports[sid];
       };
 
-      const mcp = buildMcp();
+      const mcp = await buildMcp();
       await mcp.connect(t);
       await t.handleRequest(req, res, req.body);
       return;
@@ -297,17 +163,23 @@ app.delete("/mcp", async (req: Request, res: Response) => {
 
 // Simple info page for testing
 app.get("/", (req, res) => {
+  const TOOL_MODE = (process.env.TOOL_MODE || "basic").toLowerCase();
+  const modeDescription = 
+    TOOL_MODE === "ui-html" ? "with HTML UI components" :
+    TOOL_MODE === "ui-react" ? "with React UI components" :
+    "basic (no UI)";
+  
   res.send(`
     <!DOCTYPE html>
     <html>
       <head><title>MCP Server</title></head>
       <body>
         <h1>MCP Server</h1>
-        <p>This is the MCP server with OAuth integration.</p>
+        <p>This is the MCP server with OAuth integration (${modeDescription}).</p>
         <p>OAuth server runs separately on port 3001.</p>
+        <p><strong>Tool Mode:</strong> <code>${TOOL_MODE}</code></p>
         <h2>MCP Endpoints:</h2>
         <ul>
-          <li><a href="/.well-known/oauth-authorization-server">OAuth Authorization Server Metadata</a></li>
           <li><a href="/.well-known/oauth-protected-resource">OAuth Protected Resource Metadata</a></li>
           <li><a href="${OAUTH_SERVER_URL}">OAuth Server (Port 3001)</a></li>
         </ul>
@@ -321,13 +193,14 @@ app.get("/", (req, res) => {
   `);
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', async () => {
+  const TOOL_MODE = (process.env.TOOL_MODE || "basic").toLowerCase();
   console.log(`🚀 MCP server listening on http://localhost:${PORT}/mcp`);
-  console.log(`📋 OAuth metadata at: http://localhost:${PORT}/.well-known/oauth-authorization-server`);
+  console.log(`📦 Tool mode: ${TOOL_MODE}`);
   console.log(`🔒 Protected resource metadata at: http://localhost:${PORT}/.well-known/oauth-protected-resource`);
   console.log(`ℹ️  Info page at: http://localhost:${PORT}/`);
   console.log(`🔐 OAuth server: ${OAUTH_SERVER_URL}`);
-  if (REQUIRE_AUTH) {
+  if (!DISABLE_AUTH) {
     if (AUTH_TOKEN_MODE === "jwt") {
       console.log(`✅ Using JWT validation via JWKS (${JWT_JWKS_URL || "(derived from issuer)"})`);
     } else {

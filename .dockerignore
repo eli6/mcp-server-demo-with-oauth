@@ -1,4 +1,5 @@
 node_modules
+**/node_modules
 npm-debug.log
 Dockerfile*
 .git
@@ -6,3 +7,7 @@ Dockerfile*
 **/.DS_Store
 .vscode
 *.swp
+
+# Web build artifacts (built inside container, don't copy from host)
+web/dist
+web/node_modules
