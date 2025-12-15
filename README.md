@@ -77,12 +77,6 @@ React UI mode provides full React component support with TypeScript, enabling so
 npm run dev:ui-react
 ```
 
-**Features:**
-- Full React 18+ support
-- TypeScript for type safety
-- Component state management
-- Modern React patterns (hooks, context, etc.)
-
 ### 🧪 React Component Development
 
 The `web/` directory contains a lightweight React development environment for designing and testing your UI components locally.
@@ -134,6 +128,30 @@ CMD ["npm", "run", "start:ui-react"]
 ```
 
 The Dockerfile automatically builds React components during the image build process, so React UI mode is ready to use in production.
+
+## Deploying to Fly.io
+
+This repo includes a `fly.example.toml` file as a starting point for Fly.io deployments so that the committed app name stays generic.
+
+- **Create your own Fly config**:
+  ```bash
+  cp fly.example.toml fly.toml
+  ```
+- **Pick a unique app name**:  
+  Edit `fly.toml` and change:
+  ```toml
+  app = "your-mcp-demo-name"
+  ```
+  to a unique name in your Fly account (for example, `mcp-oauth-demo-yourname`). This value controls:
+  - The Fly app ID
+  - The default URL: `https://your-mcp-demo-name.fly.dev`
+- **Create the app and deploy**:
+  ```bash
+  fly apps create your-mcp-demo-name
+  fly deploy
+  ```
+
+This keeps the open source repo neutral while making it obvious to others that they must choose their own Fly app name.
 
 ---
 
