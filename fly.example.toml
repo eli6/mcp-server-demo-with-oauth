@@ -1,9 +1,8 @@
-# fly.toml app configuration file generated for mcp-pluggdax-bare on 2025-10-13T13:26:51+02:00
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'mcp-pluggdax-bare'
+app = 'CHANGE-THIS-NAME'
 primary_region = 'arn'
 
 [build]

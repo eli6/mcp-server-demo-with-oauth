@@ -9,3 +9,5 @@ web/node_modules/
 
 .DS_Store
 **/.DS_Store
+
+fly.toml

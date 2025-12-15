@@ -1,5 +1,5 @@
 {
-  "name": "mcp-pluggdax-bare",
+  "name": "mcp-demo-bare",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
@@ -12,10 +12,10 @@
     "start:ui-react": "TOOL_MODE=ui-react tsx src/start.ts",
     "start:oauth": "tsx src/oauth.ts",
     "build:web": "cd web && npm install && npm run build",
-    "docker:build": "docker build -t mcp-pluggdax-bare:dev .",
-    "docker:run": "docker run --rm -p 3000:3000 --name mcp-pluggdax mcp-pluggdax-bare:dev",
-    "docker:stop": "docker rm -f mcp-pluggdax || true",
-    "docker:logs": "docker logs -f mcp-pluggdax"
+    "docker:build": "docker build -t mcp-demo-bare:dev .",
+    "docker:run": "docker run --rm -p 3000:3000 --name mcp-demo-bare mcp-demo-bare:dev",
+    "docker:stop": "docker rm -f mcp-demo-bare || true",
+    "docker:logs": "docker logs -f mcp-demo-bare"
   },
   "keywords": [],
   "author": "",
