@@ -39,7 +39,7 @@ const oauthConfig: OAuthConfig = {
 
 
 const app = express();
-// Respect X-Forwarded-* headers from reverse proxies (so req.protocol becomes https)
+app.set("trust proxy", true);
 app.use(express.json());
 app.use(cors({ origin: "*", exposedHeaders: ["Mcp-Session-Id"] }));
 
